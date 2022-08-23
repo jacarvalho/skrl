@@ -60,8 +60,8 @@ class TD3(Agent):
                  models: Dict[str, Model], 
                  memory: Union[Memory, Tuple[Memory], None] = None, 
                  observation_space: Union[int, Tuple[int], gym.Space, None] = None, 
-                 action_space: Union[int, Tuple[int], gym.Space, None] = None, 
-                 device: Union[str, torch.device] = "cuda:0", 
+                 action_space: Union[int, Tuple[int], gym.Space, None] = None,
+                 device: Union[str, torch.device] = "cuda:0",
                  cfg: dict = {}) -> None:
         """Twin Delayed DDPG (TD3)
 
@@ -92,6 +92,8 @@ class TD3(Agent):
                          action_space=action_space, 
                          device=device, 
                          cfg=_cfg)
+
+        self._mSVF_actor = cfg.get('mSVF_actor', False)
 
         # models
         self.policy = self.models.get("policy", None)
@@ -367,6 +369,11 @@ class TD3(Agent):
                 critic_values, _, _ = self.critic_1.act(states=sampled_states, taken_actions=actions)
 
                 policy_loss = -critic_values.mean()
+                if self._mSVF_actor:
+                    # add fix center loss
+                    mSVF = self.policy.net
+                    fix_center_loss = self._fix_center_loss_fn(mSVF, dim=self.policy.num_observations, device=self.device)
+                    policy_loss += fix_center_loss
 
                 # optimization step (policy)
                 self.policy_optimizer.zero_grad()
@@ -403,3 +410,29 @@ class TD3(Agent):
             if self._learning_rate_scheduler:
                 self.track_data("Learning / Policy learning rate", self.policy_scheduler.get_last_lr()[0])
                 self.track_data("Learning / Critic learning rate", self.critic_scheduler.get_last_lr()[0])
+
+    def _fix_center_loss_fn(self, flow, dim=2, device='cpu', x=None, position=True, orientation=False):
+        # TODO also fix center for orientation?
+        r1 = -1e-4
+        r2 = 1e-4
+        batch_size = 1
+        if x is None:
+            x = torch.zeros(batch_size, dim, device=device).float()
+            # x = (r1 - r2) * torch.rand(batch_size, dim, device=device) + r2
+        x.requires_grad = True
+        # z = torch.zeros(100, dim, device=device).float()
+        z = x.clone()
+        z_pred = flow.pushforward(x)
+
+        # loss_fn = torch.nn.SmoothL1Loss()
+        # loss = loss_fn(z_pred[0:2], z[0:2])
+        # print("fix center loss: ", loss)
+
+        # dist_fn = torch.nn.MSELoss()
+        # d = dist_fn(z_pred, z)
+        d = torch.linalg.norm(z_pred - z)
+        w = 1.5
+        v = 0.1
+        alpha = 5e-4
+        loss = w * (d ** 2) + v * torch.log(d ** 2 + alpha)
+        return loss

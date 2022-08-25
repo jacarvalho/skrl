@@ -229,6 +229,7 @@ class TD3(Agent):
                 # modify actions
                 actions[0].add_(noises)
 
+                # clip the actions
                 if self._backward_compatibility:
                     actions = (torch.max(torch.min(actions[0], self.clip_actions_max), self.clip_actions_min), 
                                actions[1], 
